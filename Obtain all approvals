@@ -1,0 +1,111 @@
+// Set the variable 'answer' to a comma-separated list of user ids and/or group ids or an array of user/group ids to add as approvers.
+//
+// For example:
+//       answer = [];
+//       answer.push('id1');
+//       answer.push('id2');
+answer = [];
+var businessApprovalsArray = [];
+var comment;
+function autoApprove(approver, comments) {
+	var app = new GlideRecord('sysapproval_approver');
+	app.initialize();
+	app.approver = approver;
+	app.state = 'approved';
+	app.comments = comments;
+	app.document_id = current.sys_id;
+	app.sysapproval = current.sys_id;
+	app.source_table = current.getTableName();
+	app.insert();
+}
+
+var skipManagerApproval = false;
+var skipBusinessApproval = false;
+//if requester is vip, skip approvals
+if(current.request.requested_for.vip){
+	skipManagerApproval = true;
+	skipBusinessApproval = true;
+	comment = 'Requester is a vip. System auto approved the request.';
+	autoApprove(current.request.requested_for.manager,comment);
+	current.u_event_message = "dont_notify_add_comment";
+}
+
+//if manager is submitting on behalf of requester, skip manager approval
+if (current.request.requested_for.manager==current.opened_by){
+	skipManagerApproval = true;
+	comment = 'System auto approved manager approval'
+	+'\nApprover: '+current.request.requested_for.manager.getDisplayValue()
+	+'\nReason:  Submitter matches approver.';
+	//create approved approval record for documentation
+	autoApprove(current.request.requested_for.manager,comment);
+	current.u_event_message = "dont_notify_add_comment";
+}
+
+//if manager's record is inactive, send it to manager's manager
+var managerApprover = current.request.requested_for.manager;
+var additionalComment='';
+if(!current.request.requested_for.manager.active){
+	managerApprover = current.request.requested_for.manager.manager;
+	additionalComment = '\nNote: Original approver '+current.request.requested_for.manager.getDisplayValue()+' was not found. Approval was sent to his/her manager-'+current.request.requested_for.manager.manager.getDisplayValue();
+}
+
+//Business approval
+var rolesVariable = current.variables.u_role.toString();
+var rolesArray = rolesVariable.split(',');
+for (i=0;i<rolesArray.length;i++)
+	{
+	var role = new GlideRecord('u_role_access_request');
+	role.addQuery('sys_id',rolesArray[i]);
+	role.query();
+	if(role.next()){
+		//if business approver's record is inactive, set approver to their manager
+		var businessApprover = role.u_business_owner;
+		var additionalComment='';
+		if(!role.u_business_owner.active){
+			businessApprover = role.u_business_owner.manager;
+			additionalComment = '\nNote:  Original approver '+role.u_business_owner.getDisplayValue()+' was not found. Approval was sent to his/her manager-'+role.u_business_owner.manager.getDisplayValue();
+		}
+		
+		//if requester is application owner, skip approval
+		if(current.request.requested_for == businessApprover){
+			comment = 'System auto approved business/role-owner approval'
+			+'\nApprover: '+businessApprover.getDisplayValue()
+			+'\nRole- ' +role.u_name.toString()
+			+'\nReason:  Requester matches approver.';
+			//current.comments = comment;
+			//create approved approval record for documentation
+			autoApprove(businessApprover,comment);
+			current.u_event_message = "dont_notify_add_comment";
+			//continue;
+		}
+		//if submitter is application owner, skip approval
+		else if(current.opened_by == businessApprover){
+			comment = 'System auto approved business/role-owner approval'
+			+'\nApprover: '+businessApprover.getDisplayValue()
+			+'\nRole- ' +role.u_name.toString()
+			+'\nReason:  Submitter matches approver.';
+			//current.comments = comment;
+			//create approved approval record for documentation
+			autoApprove(businessApprover,comment);
+			current.u_event_message = "dont_notify_add_comment";
+			//continue;
+		}
+		else {current.comments='Awaiting business/role-owner approval'
+			+ '\nApprover: '+ businessApprover.getDisplayValue()
+			+'\nRole: ' +role.u_name.toString()+additionalComment;
+			current.u_event_message = "dont_notify_add_comment";
+			businessApprovalsArray.push(businessApprover);
+		}
+	}
+}
+
+if(!skipManagerApproval){
+	current.comments='Awaiting manager approval'+ '\nApprover: '+ current.request.requested_for.manager.getDisplayValue()+additionalComment;
+	current.u_event_message = "dont_notify_add_comment";
+	answer.push(approver);
+}
+
+//Business approvals
+if(!skipBusinessApproval){
+answer = businessApprovalsArray;
+}
